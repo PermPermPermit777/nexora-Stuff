@@ -83,6 +83,15 @@ def collect_entries(libdir: str, abi: str) -> list:
     client_name = f"libclient_android_{suffix}.so"
     add(client_name, f"lib/{abi}/{client_name}", False, "CS16Client client DLL (crash handler)")
 
+    # The main menu, built from the same tree as the client. The engine looks
+    # for cl_dlls/libmenu_android_<arch>.so first, then <gamelibdir>/ of the
+    # same name, and only falls back to libmenu.so out of the engine package.
+    # Shipping it under the first name is what makes the game package the menu
+    # comes from; without it every run used the stock menu from the engine
+    # app, which is not the one this tree builds.
+    menu_name = f"libmenu_android_{suffix}.so"
+    add(menu_name, f"lib/{abi}/{menu_name}", False, "CS16Client main menu (mainui_cpp)")
+
     # VGUI2 scoreboard runtime. The client dll dlopen()s it instead of linking
     # it, so a device that never gets this file still runs - the text
     # scoreboard takes over. It is still marked required because this bundle is

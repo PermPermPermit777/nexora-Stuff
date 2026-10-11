@@ -780,7 +780,7 @@ private fun externalRoot(app: Application): File {
             val targetDir = File(libsDir, abi)
             val localFiles = if (targetDir.isDirectory) {
                 targetDir.listFiles()
-                    ?.filter { it.isFile && it.name.endsWith(".so") && !it.name.startsWith("libmenu_") }
+                    ?.filter { it.isFile && it.name.endsWith(".so") }
                     ?.map { it.name to it }
                     ?.toMap()
                     ?: emptyMap()

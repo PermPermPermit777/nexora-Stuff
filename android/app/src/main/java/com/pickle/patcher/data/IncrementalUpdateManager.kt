@@ -294,7 +294,7 @@ object IncrementalUpdateManager {
 
         val files = HashMap<String, File>()
         targetDir.listFiles()?.filter {
-            it.isFile && it.extension == "so" && !it.name.startsWith("libmenu_")
+            it.isFile && it.extension == "so"
         }?.forEach { file ->
             val name = file.name
             val targetPath = getTargetPath(name, abi, suffix, modSuffix)

@@ -81,8 +81,18 @@ def main():
             "required": False,
             "description": "CS16Client client DLL (crash handler)",
         })
-    # libmenu intentionally NOT embedded: the text-based menu (mainui_cpp ->
-    # libmenu_android_<arch>.so) is broken/misbehaving, so the stock menu stays.
+    # Main menu, built by the runner from the same tree as the client. The
+    # engine asks for this name before it falls back to the stock menu in the
+    # engine package, so shipping it is what makes the game package provide it.
+    menu_so = os.path.join(libdir, f"libmenu_android_{suffix}.so")
+    if os.path.exists(menu_so):
+        entries.append({
+            "source": f"{abidir}/libmenu_android_{suffix}.so",
+            "target": f"{abidir}/libmenu_android_{suffix}.so",
+            "method": "STORED",
+            "required": False,
+            "description": "CS16Client main menu (mainui_cpp)",
+        })
     for mod in MODULES:
         modname = f"lib{mod}_amxx_{mod_suffix}.so"
         p = os.path.join(libdir, modname)
