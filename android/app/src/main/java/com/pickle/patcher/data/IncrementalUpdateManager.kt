@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
@@ -44,6 +45,8 @@ object IncrementalUpdateManager {
         data class ManifestFile(
             val name: String = "",
             val asset: String = "",
+            val sha256: String = "",
+            val build: String = "",
             val size: Long = 0,
         )
     }
@@ -53,6 +56,8 @@ object IncrementalUpdateManager {
         val cleanName: String,
         val size: Long,
         val downloadUrl: String,
+        val sha256: String = "",
+        val build: String = "",
     )
 
     data class UpdateResult(
@@ -97,6 +102,8 @@ object IncrementalUpdateManager {
                     cleanName = f.name,
                     size = f.size,
                     downloadUrl = ReleaseRepository.assetUrl(REPO, tag, f.asset),
+                    sha256 = f.sha256,
+                    build = f.build,
                 )
             }
         }
@@ -133,16 +140,34 @@ object IncrementalUpdateManager {
 
     /**
      * Compare release assets against local files on disk.
-     * Uses file size as the comparison metric.
+     *
+     * The comparison is the build stamp the manifest carries, looked up in
+     * appliedBuilds - what this phone last wrote to disk. That is what the
+     * release says produced the bytes, and comparing two short strings costs
+     * nothing.
+     *
+     * Size is only the fallback, for files this phone has never stamped: a
+     * fresh install has no history. It is not good enough on its own, and the
+     * reason is worth keeping in mind: libcs_android_arm64.so rebuilt with a
+     * handful of HUD instructions came out at exactly 3619064 bytes, the same
+     * as the build before it, so a size check reported it as current and the
+     * phone ran the old game dll for a week. Size can only prove a file is
+     * stale when it also grew or shrank; a rebuild that lands on the same
+     * length is invisible to it.
      */
-    fun diff(releaseAssets: List<AssetInfo>, libsDir: File, abi: String): UpdateResult {
+    fun diff(
+        releaseAssets: List<AssetInfo>,
+        libsDir: File,
+        abi: String,
+        appliedBuilds: Map<String, String> = emptyMap(),
+    ): UpdateResult {
         val targetDir = File(libsDir, abi)
         val toDownload = mutableListOf<AssetInfo>()
         val upToDate = mutableListOf<AssetInfo>()
 
         for (asset in releaseAssets) {
             val fileOnDisk = File(targetDir, asset.cleanName)
-            if (fileOnDisk.exists() && fileOnDisk.length() == asset.size) {
+            if (isUpToDate(fileOnDisk, asset, appliedBuilds[asset.cleanName])) {
                 upToDate.add(asset)
             } else {
                 toDownload.add(asset)
@@ -154,10 +179,57 @@ object IncrementalUpdateManager {
     }
 
     /**
-     * True when the local file exists and its size matches the release entry.
+     * True when the local file is the build the release is offering.
+     *
+     * Three tiers, cheapest first:
+     *   1. build stamps, both sides known - two short strings, free
+     *   2. size differs - stale, no reading needed
+     *   3. size matches and the manifest has a sha256 but this phone never
+     *      stamped the file: hash it once and compare
+     *
+     * Tier 3 is the bootstrap. A phone upgrading from the size-only build has
+     * no stamp for anything, so every library would fall through to size and
+     * the one that most needs replacing - the game dll, rebuilt to exactly the
+     * same length - would be called current all over again. Hashing 150 MB
+     * once, on the first check after the update, is the price of not shipping
+     * a stale client again.
      */
-    fun isUpToDate(fileOnDisk: File, asset: AssetInfo): Boolean {
-        return fileOnDisk.exists() && fileOnDisk.length() == asset.size
+    fun isUpToDate(
+        fileOnDisk: File,
+        asset: AssetInfo,
+        appliedBuild: String? = null,
+    ): Boolean {
+        if (!fileOnDisk.exists()) return false
+
+        val want = asset.build
+        val have = appliedBuild
+        if (!want.isNullOrEmpty() && !have.isNullOrEmpty())
+            return want == have
+
+        if (fileOnDisk.length() != asset.size) return false
+
+        val sha = asset.sha256
+        if (sha.isEmpty() || have != null) return true
+
+        return sha256Of(fileOnDisk) == sha
+    }
+
+    /** Streaming sha256 of a local file, lowercase hex. Empty if unreadable. */
+    fun sha256Of(file: File): String {
+        return try {
+            val md = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buf = ByteArray(1 shl 16)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    md.update(buf, 0, n)
+                }
+            }
+            md.digest().joinToString("") { "%02x".format(it) }
+        } catch (_: Throwable) {
+            ""
+        }
     }
 
     /**

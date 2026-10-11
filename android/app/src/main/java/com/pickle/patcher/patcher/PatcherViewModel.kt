@@ -823,7 +823,9 @@ private fun externalRoot(app: Application): File {
                         localSize = f?.length() ?: 0L,
                         releaseSize = asset?.size ?: (f?.length() ?: 0L),
                         upToDate = if (asset != null) {
-                            IncrementalUpdateManager.isUpToDate(File(targetDir, name), asset)
+                            IncrementalUpdateManager.isUpToDate(
+                                File(targetDir, name), asset, appliedBuilds(_abi.value)[name]
+                            )
                         } else true,
                     )
                 }
@@ -866,7 +868,10 @@ private fun externalRoot(app: Application): File {
             }
             val fileOnDisk = File(File(libsDir, _abi.value), libName)
             val newSize = if (fileOnDisk.exists()) fileOnDisk.length() else 0L
-            val upToDate = IncrementalUpdateManager.isUpToDate(fileOnDisk, asset)
+            val upToDate = IncrementalUpdateManager.isUpToDate(
+                fileOnDisk, asset, appliedBuilds(_abi.value)[libName]
+            )
+            recordAppliedBuilds(_abi.value, listOf(asset))
             _libs.value = _libs.value.map {
                 if (it.name == libName) it.copy(localSize = newSize, upToDate = upToDate) else it
             }
@@ -893,13 +898,16 @@ private fun externalRoot(app: Application): File {
                 if (assets.isEmpty()) throw IOException("No .so assets found for ABI ${_abi.value}")
                 _bundle.update { BundleState.Downloading(0.1f, tagName) }
 
-                val diff = IncrementalUpdateManager.diff(assets, libsDir, _abi.value)
+                val diff = IncrementalUpdateManager.diff(
+                    assets, libsDir, _abi.value, appliedBuilds(_abi.value)
+                )
 
                 if (diff.toDownload.isEmpty()) {
                     val files = IncrementalUpdateManager.loadBundleFileMap(libsDir, _abi.value)
                     if (files.isEmpty()) throw IOException("No .so files found in libs/")
                     val b = buildBundleFromFileMap(files, _abi.value)
                     markBundleTagKnown(tagName)
+                    recordAppliedBuilds(_abi.value, assets)
                     _bundle.value = BundleState.Loaded
                     loadedBundle = b
                     scanLibs()
@@ -964,6 +972,7 @@ private fun externalRoot(app: Application): File {
                 if (files.isEmpty()) throw IOException("No .so files found after download")
                 val b = buildBundleFromFileMap(files, _abi.value)
                 markBundleTagKnown(tagName)
+                recordAppliedBuilds(_abi.value, assets)
                 _bundle.value = BundleState.Ready(
                     "Updated ${diff.toDownload.size} files", b.manifest.entries.size, b.manifest.version
                 )
@@ -1912,6 +1921,38 @@ private fun externalRoot(app: Application): File {
 
     fun markBundleTagKnown(tag: String) {
         updatePrefs.edit().putString("known_bundle_tag", tag).apply()
+    }
+
+    /**
+     * The build stamp per library file, as last written to disk on this phone.
+     *
+     * This is what turns the manifest's build id into an answer instead of an
+     * opinion: the release says which build produced a file's bytes, we say
+     * which build's bytes we are holding, and comparing the two short strings
+     * settles it without reading 150 MB back. Size alone cannot: a rebuilt
+     * library that happens to land on the same length looks identical, which
+     * is how the game dll stayed stale on disk while the patcher reported
+     * everything current.
+     */
+    private fun appliedBuilds(abi: String): Map<String, String> {
+        val raw = updatePrefs.getString("applied_builds_$abi", null) ?: return emptyMap()
+        return runCatching {
+            raw.split('\n').mapNotNull { line ->
+                val i = line.indexOf('=')
+                if (i <= 0) null else line.substring(0, i) to line.substring(i + 1)
+            }.toMap()
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun recordAppliedBuilds(abi: String, assets: List<IncrementalUpdateManager.AssetInfo>) {
+        val merged = appliedBuilds(abi).toMutableMap()
+        for (a in assets) if (a.build.isNotEmpty()) merged[a.cleanName] = a.build
+        updatePrefs.edit()
+            .putString(
+                "applied_builds_$abi",
+                merged.entries.joinToString("\n") { "${it.key}=${it.value}" },
+            )
+            .apply()
     }
 
     private fun mb(bytes: Long): String =

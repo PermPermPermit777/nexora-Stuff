@@ -2,14 +2,29 @@
 """Generate an incremental-update manifest and stage individual .so files.
 
   gen-manifest.py <abi> <libdir> <outdir> [--plugins-dir <dir>]
+                  [--build-id <sha>] [--previous <manifest.json>]
 
 For each .so in <libdir>, computes SHA-256 and writes:
   <outdir>/manifest.json          — file inventory for the patcher
   <outdir>/<abi>/<filename>.so    — individual .so files (copy)
 
-The manifest format is consumed by the patcher's IncrementalUpdateManager.
-Asset names use ABI prefix (e.g. arm64-v8a__libamxmodx.so) to avoid GitHub
-Release asset name conflicts when both ABIs exist in the same release.
+Every entry also carries a "build" stamp: the id of the build that last
+changed that file's contents. The patcher stores the stamp it applied and
+compares the two strings, so it can tell a rebuilt library from an unchanged
+one without hashing 150 MB of files on the phone.
+
+Comparing sizes alone cannot do this. libcs_android_arm64.so rebuilt with a
+few instructions of HUD fixup came out exactly the same size as the build
+before it, so the patcher called it up to date and shipped none of the fix.
+The stamp is the answer the user asked for and the honest one: a file is
+stale when its bytes differ, and sha256 is what decides that. It is computed
+here, once, in CI, where reading the file is free.
+
+--build-id and --previous are how the stamp stays meaningful across releases:
+the current build id is stamped onto files whose sha256 changed since the
+previous manifest, and files that did not change keep the stamp they already
+had. Without --previous the first manifest stamps everything with the build
+id, which is correct but marks unchanged files as new.
 """
 import argparse
 import hashlib
@@ -19,6 +34,7 @@ import shutil
 import sys
 
 VERSION = os.environ.get("RELEASE_VERSION", "1.10.0-dev")
+BUILD_ID = "unknown"
 
 MODULES = [
     "cstrike", "csx", "engine", "fakemeta", "fun", "geoip",
@@ -40,7 +56,39 @@ def sha256_of(path: str) -> str:
     return h.hexdigest()
 
 
-def collect_entries(libdir: str, abi: str) -> list:
+def load_previous(path: str | None) -> dict:
+    """name -> {sha256, build} from the manifest this build supersedes."""
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        print(f"WARN: previous manifest unreadable ({exc})", file=sys.stderr)
+        return {}
+    out = {}
+    for entry in data.get("files", []):
+        name = entry.get("name")
+        if name:
+            out[name] = {"sha256": entry.get("sha256", ""), "build": entry.get("build", "unknown")}
+    return out
+
+
+def stamp_for(name: str, sha: str, previous: dict) -> str:
+    """The build that produced these exact bytes.
+
+    Stamped with the current build when the contents changed, carried over
+    otherwise, so a release that rebuilds nothing marks nothing and the phone
+    downloads nothing. A file rebuilt to identical bytes keeps the old stamp,
+    which is still true: the bytes did not change.
+    """
+    old = previous.get(name)
+    if old and old.get("sha256") == sha and old.get("build"):
+        return old["build"]
+    return BUILD_ID
+
+
+def collect_entries(libdir: str, abi: str, previous: dict) -> list:
     suffix, mod_suffix = ABI_MAP[abi]
     entries = []
 
@@ -50,12 +98,14 @@ def collect_entries(libdir: str, abi: str) -> list:
             print(f"WARN: {name} not found, skipping", file=sys.stderr)
             return
         asset_name = f"{abi}__{name}"
+        sha = sha256_of(src)
         entries.append({
             "name": name,
             "asset": asset_name,
             "path": f"lib/{abi}/{name}",
             "target": target,
-            "sha256": sha256_of(src),
+            "sha256": sha,
+            "build": stamp_for(name, sha, previous),
             "size": os.path.getsize(src),
             "required": required,
             "description": desc,
@@ -67,12 +117,14 @@ def collect_entries(libdir: str, abi: str) -> list:
     metamod_src = os.path.join(libdir, "libmetamod.so")
     if os.path.exists(metamod_src):
         asset_name = f"{abi}__libmetamod.so"
+        metamod_sha = sha256_of(metamod_src)
         entries.append({
             "name": "libmetamod.so",
             "asset": asset_name,
             "path": f"lib/{abi}/libmetamod.so",
             "target": f"lib/{abi}/{metamod_name}",
-            "sha256": sha256_of(metamod_src),
+            "sha256": metamod_sha,
+            "build": stamp_for("libmetamod.so", metamod_sha, previous),
             "size": os.path.getsize(metamod_src),
             "required": True,
             "description": "Metamod HL1 (as libyapb for -dll @yapb)",
@@ -120,14 +172,20 @@ def main():
     parser.add_argument("libdir", help="Directory containing built .so files")
     parser.add_argument("outdir", help="Output directory for manifest + staged files")
     parser.add_argument("--plugins-dir", help="Directory containing compiled .amxx plugins")
+    parser.add_argument("--build-id", default="", help="commit id stamped onto rebuilt files")
+    parser.add_argument("--previous", help="manifest.json of the release being superseded")
     args = parser.parse_args()
+
+    global BUILD_ID
+    BUILD_ID = args.build_id or os.environ.get("GITHUB_SHA", "")[:12] or "unknown"
+    previous = load_previous(args.previous)
 
     if args.abi not in ABI_MAP:
         print(f"unsupported ABI: {args.abi}", file=sys.stderr)
         sys.exit(1)
 
     # Collect .so entries
-    entries = collect_entries(args.libdir, args.abi)
+    entries = collect_entries(args.libdir, args.abi, previous)
 
     manifest = {
         "version": VERSION,

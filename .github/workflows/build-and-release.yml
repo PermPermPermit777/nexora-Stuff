@@ -393,12 +393,24 @@ jobs:
         if: steps.build_type.outputs.needs_libs == 'true'
         shell: bash
         run: |
+          # The manifest this build supersedes, so a file whose bytes did not
+          # change keeps its old build stamp instead of being marked new.
+          # Without it every release would look like a full rebuild.
+          PREV="$GITHUB_WORKSPACE/prev-manifest"
+          mkdir -p "$PREV"
+          for f in manifest.json manifest-v7a.json; do
+            curl -fsSL -o "$PREV/$f" \
+              "https://github.com/berkchy/nexora/releases/download/continuous/$f" \
+              || echo "no previous $f"
+          done
+
           # Incremental update: individual .so files + manifest.json
           RELEASE_VERSION="$BUNDLE_VERSION" python3 ./android/ci/gen-manifest.py \
             arm64-v8a \
             "$GITHUB_WORKSPACE/build-out/lib/arm64-v8a" \
             "$GITHUB_WORKSPACE/incremental" \
-            --plugins-dir "$GITHUB_WORKSPACE/build-out/plugins"
+            --plugins-dir "$GITHUB_WORKSPACE/build-out/plugins" \
+            --previous "$PREV/manifest.json"
           # Rename manifest for arm64 (default ABI keeps manifest.json name)
           mv "$GITHUB_WORKSPACE/incremental/manifest.json" "$GITHUB_WORKSPACE/manifest.json"
 
@@ -407,7 +419,8 @@ jobs:
             RELEASE_VERSION="$BUNDLE_VERSION" python3 ./android/ci/gen-manifest.py \
               armeabi-v7a \
               "$GITHUB_WORKSPACE/build-out/lib/armeabi-v7a" \
-              "$GITHUB_WORKSPACE/incremental-v7a"
+              "$GITHUB_WORKSPACE/incremental-v7a" \
+              --previous "$PREV/manifest-v7a.json"
             # Rename manifest for v7a to avoid conflict
             mv "$GITHUB_WORKSPACE/incremental-v7a/manifest.json" "$GITHUB_WORKSPACE/manifest-v7a.json"
           fi
