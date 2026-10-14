@@ -300,7 +300,15 @@ jobs:
           # Fetched as a tarball rather than a clone: the gamedata measurement
           # needs a specific file out of the tree, and a shallow clone that
           # comes back without its checkout used to fail much later.
-          curl -fsSL "https://codeload.github.com/berkchy/ReGameDLL_CS/tar.gz/refs/heads/fix/first-spawn-equip" \
+          # The head of that branch is also what stamps libcs in the
+          # manifest, so a phone only re-downloads it when the branch moved.
+          RGDLL_BRANCH=fix/first-spawn-equip
+          curl -fsSL "https://api.github.com/repos/berkchy/ReGameDLL_CS/commits/$RGDLL_BRANCH" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"][:12])' \
+            > "$GITHUB_WORKSPACE/rgdll-sha" \
+            || echo unknown > "$GITHUB_WORKSPACE/rgdll-sha"
+          echo "regamedll $RGDLL_BRANCH -> $(cat "$GITHUB_WORKSPACE/rgdll-sha")"
+          curl -fsSL "https://codeload.github.com/berkchy/ReGameDLL_CS/tar.gz/refs/heads/$RGDLL_BRANCH" \
             | tar -xz -C "$RGDLL" --strip-components=1
           # The gamedll measures its own cstrike pdata offsets out of the debug
           # info it compiles with, but the fork builds with -g0 and strips at
@@ -405,12 +413,37 @@ jobs:
           done
 
           # Incremental update: individual .so files + manifest.json
+          #
+          # Producer stamps, not the sha of the output. The build is not
+          # reproducible - libvgui2client.so built from an identical tree on
+          # 7 Oct and 12 Oct came out the same 15911408 bytes with different
+          # content - so a sha stamp advances on every release and the phone
+          # re-downloads libraries nobody touched. These ask the question the
+          # stamp should be asking: did anything that goes into this library
+          # change? A vcs16 commit now costs three downloads instead of seven,
+          # and an amxmodx-only change costs none of them.
+          PRODUCER_ARGS=()
+          sub_sha() {
+            local path="$1" out
+            out="$(git ls-tree HEAD "$path" 2>/dev/null | awk '{print $3}')"
+            [ -n "$out" ] && echo "$out" || echo "unknown"
+          }
+          PRODUCER_ARGS+=(--producer "vcs16=$(sub_sha vcs16)")
+          PRODUCER_ARGS+=(--producer "amxmodx=$(sub_sha 3rdparty/amxmodx)")
+          PRODUCER_ARGS+=(--producer "metamod=$(sub_sha 3rdparty/metamod-fwgs)")
+          PRODUCER_ARGS+=(--producer "yapb=$(sub_sha 3rdparty/yapb)")
+          if [ -f "$GITHUB_WORKSPACE/rgdll-sha" ]; then
+            PRODUCER_ARGS+=(--producer "regamedll=$(cat "$GITHUB_WORKSPACE/rgdll-sha")")
+          fi
+          echo "producer stamps: ${PRODUCER_ARGS[*]}"
+
           RELEASE_VERSION="$BUNDLE_VERSION" python3 ./android/ci/gen-manifest.py \
             arm64-v8a \
             "$GITHUB_WORKSPACE/build-out/lib/arm64-v8a" \
             "$GITHUB_WORKSPACE/incremental" \
             --plugins-dir "$GITHUB_WORKSPACE/build-out/plugins" \
-            --previous "$PREV/manifest.json"
+            --previous "$PREV/manifest.json" \
+            "${PRODUCER_ARGS[@]}"
           # Rename manifest for arm64 (default ABI keeps manifest.json name)
           mv "$GITHUB_WORKSPACE/incremental/manifest.json" "$GITHUB_WORKSPACE/manifest.json"
 
@@ -420,7 +453,8 @@ jobs:
               armeabi-v7a \
               "$GITHUB_WORKSPACE/build-out/lib/armeabi-v7a" \
               "$GITHUB_WORKSPACE/incremental-v7a" \
-              --previous "$PREV/manifest-v7a.json"
+              --previous "$PREV/manifest-v7a.json" \
+              "${PRODUCER_ARGS[@]}"
             # Rename manifest for v7a to avoid conflict
             mv "$GITHUB_WORKSPACE/incremental-v7a/manifest.json" "$GITHUB_WORKSPACE/manifest-v7a.json"
           fi

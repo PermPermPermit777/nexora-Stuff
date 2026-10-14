@@ -36,6 +36,11 @@ import sys
 VERSION = os.environ.get("RELEASE_VERSION", "1.10.0-dev")
 BUILD_ID = "unknown"
 
+# producer name -> the id of the sources that library is built from.
+# Filled from --producer on the command line. Empty means every file falls back
+# to the sha256 comparison.
+PRODUCERS: dict[str, str] = {}
+
 MODULES = [
     "cstrike", "csx", "engine", "fakemeta", "fun", "geoip",
     "hamsandwich", "json", "nvault", "reapi", "regex", "sockets", "sqlite",
@@ -74,14 +79,30 @@ def load_previous(path: str | None) -> dict:
     return out
 
 
-def stamp_for(name: str, sha: str, previous: dict) -> str:
-    """The build that produced these exact bytes.
+def stamp_for(name: str, sha: str, previous: dict, producer: str | None = None) -> str:
+    """The stamp that tells the phone whether it needs this file.
 
-    Stamped with the current build when the contents changed, carried over
-    otherwise, so a release that rebuilds nothing marks nothing and the phone
-    downloads nothing. A file rebuilt to identical bytes keeps the old stamp,
-    which is still true: the bytes did not change.
+    Two ways to answer that, and the producer one is the one that works.
+
+    Comparing sha256 of the output only works if the build is reproducible.
+    It is not: libvgui2client.so built from an identical tree on 7 Oct and on
+    12 Oct came out the same length, 15911408 bytes, with different content.
+    So its sha changed, the stamp advanced, and the phone re-downloaded a
+    library nobody had touched - along with every other one built in the same
+    run, because they all carry the same flaw.
+
+    A producer stamp asks a better question: has anything that goes into this
+    library changed? The CI already knows, as the submodule commits. It is
+    coarser than sha256 within a producer - an edit to the client dll marks the
+    menu as new too - but it is never wrong in the direction that matters,
+    which is marking a changed library as up to date.
+
+    Falls back to the sha comparison for a file with no known producer, and
+    for the first release of a producer whose phone has never seen it.
     """
+    if producer and producer in PRODUCERS:
+        return f"{producer}@{PRODUCERS[producer]}"
+
     old = previous.get(name)
     if old and old.get("sha256") == sha and old.get("build"):
         return old["build"]
@@ -92,7 +113,7 @@ def collect_entries(libdir: str, abi: str, previous: dict) -> list:
     suffix, mod_suffix = ABI_MAP[abi]
     entries = []
 
-    def add(name, target, required, desc):
+    def add(name, target, required, desc, producer=None):
         src = os.path.join(libdir, name)
         if not os.path.exists(src):
             print(f"WARN: {name} not found, skipping", file=sys.stderr)
@@ -105,13 +126,14 @@ def collect_entries(libdir: str, abi: str, previous: dict) -> list:
             "path": f"lib/{abi}/{name}",
             "target": target,
             "sha256": sha,
-            "build": stamp_for(name, sha, previous),
+            "build": stamp_for(name, sha, previous, producer),
+            "producer": producer or "",
             "size": os.path.getsize(src),
             "required": required,
             "description": desc,
         })
 
-    add("libamxmodx.so", f"lib/{abi}/libamxmodx.so", True, "AMX Mod X core")
+    add("libamxmodx.so", f"lib/{abi}/libamxmodx.so", True, "AMX Mod X core", producer="amxmodx")
 
     metamod_name = "libyapb_android_" + suffix + ".so"
     metamod_src = os.path.join(libdir, "libmetamod.so")
@@ -124,16 +146,18 @@ def collect_entries(libdir: str, abi: str, previous: dict) -> list:
             "path": f"lib/{abi}/libmetamod.so",
             "target": f"lib/{abi}/{metamod_name}",
             "sha256": metamod_sha,
-            "build": stamp_for("libmetamod.so", metamod_sha, previous),
+            "build": stamp_for("libmetamod.so", metamod_sha, previous, "metamod"),
+            "producer": "metamod",
             "size": os.path.getsize(metamod_src),
             "required": True,
             "description": "Metamod HL1 (as libyapb for -dll @yapb)",
         })
 
-    add("libyapb.so", f"lib/{abi}/libyapb.so", False, "YaPB bot plugin")
+    add("libyapb.so", f"lib/{abi}/libyapb.so", False, "YaPB bot plugin", producer="yapb")
 
     client_name = f"libclient_android_{suffix}.so"
-    add(client_name, f"lib/{abi}/{client_name}", False, "CS16Client client DLL (crash handler)")
+    add(client_name, f"lib/{abi}/{client_name}", False, "CS16Client client DLL (crash handler)",
+        producer="vcs16")
 
     # The main menu, built from the same tree as the client. The engine looks
     # for cl_dlls/libmenu_android_<arch>.so first, then <gamelibdir>/ of the
@@ -142,7 +166,8 @@ def collect_entries(libdir: str, abi: str, previous: dict) -> list:
     # comes from; without it every run used the stock menu from the engine
     # app, which is not the one this tree builds.
     menu_name = f"libmenu_android_{suffix}.so"
-    add(menu_name, f"lib/{abi}/{menu_name}", False, "CS16Client main menu (mainui_cpp)")
+    add(menu_name, f"lib/{abi}/{menu_name}", False, "CS16Client main menu (mainui_cpp)",
+        producer="vcs16")
 
     # VGUI2 scoreboard runtime. The client dll dlopen()s it instead of linking
     # it, so a device that never gets this file still runs - the text
@@ -150,18 +175,19 @@ def collect_entries(libdir: str, abi: str, previous: dict) -> list:
     # the only place the scoreboard can come from, and without it nobody would
     # ever receive it.
     add("libvgui2client.so", f"lib/{abi}/libvgui2client.so", True,
-        "VGUI2 scoreboard runtime (dlopen'ed by the client DLL)")
+        "VGUI2 scoreboard runtime (dlopen'ed by the client DLL)", producer="vcs16")
 
     # ReGameDLL game DLL, bundled as libcs. Shipped from the berkchy fork branch
     # fix/first-spawn-equip; skipped silently when not present, then
     # the patcher falls back to patching the base APK's libcs in place.
     libcs_name = "libcs_android_" + suffix + ".so"
-    add(libcs_name, f"lib/{abi}/{libcs_name}", False, "ReGameDLL game DLL (first-spawn fix)")
+    add(libcs_name, f"lib/{abi}/{libcs_name}", False, "ReGameDLL game DLL (first-spawn fix)",
+        producer="regamedll")
 
     # libmenu intentionally NOT shipped: the text-based menu is broken, stock stays.
     for mod in MODULES:
         modname = f"lib{mod}_amxx_{mod_suffix}.so"
-        add(modname, f"lib/{abi}/{modname}", True, f"{mod} module")
+        add(modname, f"lib/{abi}/{modname}", True, f"{mod} module", producer="amxmodx")
 
     return entries
 
@@ -174,11 +200,33 @@ def main():
     parser.add_argument("--plugins-dir", help="Directory containing compiled .amxx plugins")
     parser.add_argument("--build-id", default="", help="commit id stamped onto rebuilt files")
     parser.add_argument("--previous", help="manifest.json of the release being superseded")
+    parser.add_argument(
+        "--producer",
+        action="append",
+        default=[],
+        metavar="NAME=STAMP",
+        help=(
+            "id of the sources one group of libraries is built from, e.g. "
+            "vcs16=<commit>. Repeatable. A file whose producer is listed is "
+            "stamped from that id instead of from its sha256, because the build "
+            "is not reproducible and identical sources keep changing the hash."
+        ),
+    )
     args = parser.parse_args()
 
     global BUILD_ID
     BUILD_ID = args.build_id or os.environ.get("GITHUB_SHA", "")[:12] or "unknown"
     previous = load_previous(args.previous)
+
+    for item in args.producer:
+        name, sep, value = item.partition("=")
+        if not sep or not name or not value:
+            print(f"WARN: --producer {item!r} is not NAME=STAMP, ignoring", file=sys.stderr)
+            continue
+        PRODUCERS[name] = value
+
+    if PRODUCERS:
+        print(f"producers: {', '.join(f'{k}={v}' for k, v in sorted(PRODUCERS.items()))}")
 
     if args.abi not in ABI_MAP:
         print(f"unsupported ABI: {args.abi}", file=sys.stderr)
