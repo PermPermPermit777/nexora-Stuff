@@ -1,0 +1,17 @@
+name: Commit
+
+on: workflow_dispatch
+
+jobs:
+  commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          submodules: recursive 
+      - run: git submodule update --recursive --remote
+      - uses: stefanzweifel/git-auto-commit-action@master
+        with:
+          commit_message: Updated submodule.
