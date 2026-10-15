@@ -11,7 +11,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
           submodules: recursive 
-      - run: git submodule update --recursive --remote
+      - run: git submodule update --recursive --remote --merge
       - uses: stefanzweifel/git-auto-commit-action@master
         with:
           commit_message: Updated submodule.
