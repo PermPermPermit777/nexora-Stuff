@@ -787,7 +787,7 @@ if [ -n "$CLIENT_SO" ]; then
 else
   echo "WARN: client lib not found, skipping"
 fi
-cmake --build "$CLIENT_BUILD" --target xashmenu -j"$(nproc)"
+cmake --build "$CLIENT_BUILD" --target menu -j"$(nproc)"
 MENU_SO=$(find "$CLIENT_BUILD" -name "libmenu*.so" | head -1)
 if [ -n "$MENU_SO" ]; then
   cp "$MENU_SO" "$OUT/lib/$ABI/libmenu_android_$RUNTIME_SUFFIX.so"
