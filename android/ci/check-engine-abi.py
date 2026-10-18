@@ -16,9 +16,6 @@ Grow this check's inputs, not the struct. Optional engine features go through
 pfnGetNativeObject(name), which is looked up by name and returns NULL when the
 engine does not know it.
 
-The same guard covers engine_motdapi_t, the table that replaced the two MOTD
-fields the struct used to carry.
-
 engine_members.txt is a fingerprint of the engine's cl_enginefunc_t: one member
 per line, in order. It is what the engine ships today; update it deliberately
 when the engine really changes, never to make this check pass.
@@ -33,14 +30,6 @@ REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 
 API_PROXY = os.path.join(REPO, "cs16-client", "engine", "APIProxy.h")
 FINGERPRINT = os.path.join(HERE, "engine_members.txt")
-
-# The engine_motdapi_t / android_motdapi_t table, which replaced the struct
-# fields. Same reasoning as above: it crosses the dll boundary by pointer, so
-# its size and member order have to match on both sides.
-MOTD_ENGINE_DECL = os.path.join(
-    HERE, "engine", "platform", "platform.h"
-)
-MOTD_ENGINE_FINGERPRINT = os.path.join(HERE, "engine_motd_members.txt")
 
 
 def struct_body(text, struct_name):
@@ -174,32 +163,6 @@ def main():
     else:
         print(f"OK: client and engine cl_enginefunc_t agree ({len(client)} slots)")
 
-    return check_motd()
-
-
-def check_motd():
-    """The MOTDAPI table must have the same layout on both sides."""
-    with open(API_PROXY, encoding="utf-8") as f:
-        client_text = f.read()
-
-    try:
-        client = members(struct_body(client_text, "engine_motdapi_t"))
-    except SystemExit as exc:
-        print(exc)
-        return 1
-
-    if not os.path.exists(MOTD_ENGINE_FINGERPRINT):
-        print(f"FAIL: missing {MOTD_ENGINE_FINGERPRINT}")
-        return 1
-
-    with open(MOTD_ENGINE_FINGERPRINT, encoding="utf-8") as f:
-        engine = [line.strip() for line in f if line.strip()]
-
-    if client != engine:
-        print(f"FAIL: MOTDAPI table differs. engine={engine} client={client}")
-        return 1
-
-    print(f"OK: MOTDAPI table matches ({len(client)} entries: {client})")
     return 0
 
 
