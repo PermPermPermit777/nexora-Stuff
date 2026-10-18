@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@main
         with:
           submodules: recursive
 
@@ -141,7 +141,7 @@ jobs:
 
       - name: Set up JDK
         if: steps.build_type.outputs.needs_android == 'true'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@main
         with:
           distribution: temurin
           # 21, not 17: cs16-client/android declares toolchainVersion=21 in
@@ -154,14 +154,14 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools'
-      - name: Install NDK r25c
+      - name: Configure 
         if: steps.build_type.outputs.needs_android == 'true' || steps.build_type.outputs.needs_libs == 'true'
         shell: bash
         run: |
-          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;25.2.9519653" \
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;30.0.16248370" \
             || (SDKM=$(ls -d $ANDROID_HOME/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1); \
-                [ -n "$SDKM" ] && echo "y" | "$SDKM" "ndk;25.2.9519653")
-          NDK_ROOT=$(ls -d "$ANDROID_HOME"/ndk/25.2.9519653 2>/dev/null)
+                [ -n "$SDKM" ] && echo "y" | "$SDKM" "ndk;30.0.16248370")
+          NDK_ROOT=$(ls -d "$ANDROID_HOME"/ndk/30.0.16248370 2>/dev/null)
           echo "ANDROID_NDK_HOME=$NDK_ROOT" >> "$GITHUB_ENV"
           command -v cmake >/dev/null || sudo apt-get update
           command -v cmake >/dev/null || sudo apt-get install -y cmake
@@ -185,11 +185,11 @@ jobs:
 
       - name: Restore ccache
         if: steps.build_type.outputs.needs_libs == 'true' && steps.build_type.outputs.skip_native != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@main
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-ndk-r25c-${{ hashFiles('android/ci/build-amxx.sh') }}
-          restore-keys: ccache-ndk-r25c-
+          key: ccache-ndk-r30-${{ hashFiles('android/ci/build-amxx.sh') }}
+          restore-keys: ccache-ndk-r30-
 
       - name: Check the client/engine ABI
         if: steps.build_type.outputs.needs_libs == 'true'
@@ -575,7 +575,7 @@ jobs:
 
       - name: Set up Gradle
         if: steps.build_type.outputs.needs_android == 'true'
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@main
         with:
           validate-wrappers: false
 
@@ -755,7 +755,7 @@ jobs:
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/') && github.ref_name != 'continuous' && (steps.build_type.outputs.needs_android == 'true' || steps.build_type.outputs.needs_libs == 'true')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@main
         with:
           body: ${{ steps.build_type.outputs.commit_msg }}
           files: |
