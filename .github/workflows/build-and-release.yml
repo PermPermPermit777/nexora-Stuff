@@ -16,6 +16,7 @@ permissions:
 env:
   BUNDLE_VERSION: ${{ github.event.inputs.version || github.ref_name || '1.10.0' }}
   ANDROID_DIR: android
+  CS16_CLIENT_URL: https://github.com/Velaron/cs16-client.git
 
 # NOTE: intentionally a SINGLE job. The old 3-job layout passed ~200 MB
 # through Actions artifacts on every tag and hit the repo artifact quota.
@@ -28,6 +29,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # cs16-client is a plain directory, not a submodule, so `submodules: recursive`
+      # does not fetch it and `git diff` cannot see it change. cs16-client.pin
+      # holds the commit to build and takes that role: changing it is what makes
+      # the native rebuild notice, exactly as moving a gitlink used to.
+      - name: Fetch cs16-client
+        shell: bash
+        run: |
+          set -euo pipefail
+          PIN=$(tr -d '[:space:]' < cs16-client.pin)
+          [ -n "$PIN" ] || { echo "::error::cs16-client.pin is empty"; exit 1; }
+          git clone "$CS16_CLIENT_URL" cs16-client
+          git -C cs16-client fetch origin "$PIN" 2>/dev/null || git -C cs16-client fetch origin
+          git -C cs16-client checkout "$PIN"
+          git -C cs16-client submodule update --init --recursive
+          GOT=$(git -C cs16-client rev-parse HEAD)
+          [ "$GOT" = "$PIN" ] || { echo "::error::cs16-client is $GOT, pin says $PIN"; exit 1; }
+          echo "cs16-client -> $GOT"
 
       - name: Detect build type
         id: build_type
@@ -50,7 +69,7 @@ jobs:
           if echo "$LOWER" | grep -qE '\[bundle build\]'; then NEEDS_LIBS=true; fi
           # The continuous channel is built either from the continuous tag or
           # from a manual run on master - otherwise a plain commit that touches
-          # vcs16 or android/ci would need the tag force-moved under it, and a
+          # cs16-client or android/ci would need the tag force-moved under it, and a
           # dispatch on master would publish nexora_vmaster.apk into the
           # continuous release.
           CONTINUOUS=false
@@ -108,7 +127,7 @@ jobs:
               if [ -n "$NATIVE_SHA" ]; then
                 META_UP=$(echo "$META_JSON" | python3 -c "import json; print(json.dumps(json.load(sys.stdin).get('upstreams',{}),sort_keys=True))" 2>/dev/null || echo "")
                 CUR_UP=$(echo "$UP_JSON" | python3 -c "import json; print(json.dumps(json.load(sys.stdin),sort_keys=True))" 2>/dev/null || echo "")
-                DIFF_OUT=$(git diff --name-only "$NATIVE_SHA" HEAD -- android/ci patches vcs16 3rdparty .github/workflows 2>/dev/null || echo "DIFF-FAILED")
+                DIFF_OUT=$(git diff --name-only "$NATIVE_SHA" HEAD -- android/ci patches cs16-client.pin 3rdparty .github/workflows 2>/dev/null || echo "DIFF-FAILED")
                 if [ "$DIFF_OUT" != "DIFF-FAILED" ] && [ -z "$DIFF_OUT" ] && [ -n "$META_UP" ] && [ "$META_UP" = "$CUR_UP" ]; then
                   SKIP_NATIVE=true
                   NATIVE_SHA_OUT=$NATIVE_SHA
@@ -125,7 +144,10 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          # 21, not 17: cs16-client/android declares toolchainVersion=21 in
+          # gradle-daemon-jvm.properties, and Gradle 8.13/AGP 8.13 both run fine
+          # on it. The patcher still targets 17 via sourceCompatibility.
+          java-version: '21'
 
       - name: Set up Android SDK/NDK tooling
         if: steps.build_type.outputs.needs_android == 'true' || steps.build_type.outputs.needs_libs == 'true'
@@ -420,15 +442,24 @@ jobs:
           # content - so a sha stamp advances on every release and the phone
           # re-downloads libraries nobody touched. These ask the question the
           # stamp should be asking: did anything that goes into this library
-          # change? A vcs16 commit now costs three downloads instead of seven,
-          # and an amxmodx-only change costs none of them.
+          # change? A cs16-client commit now costs three downloads instead of
+          # seven, and an amxmodx-only change costs none of them.
           PRODUCER_ARGS=()
+          # git rev-parse HEAD:<path> resolves to the tree sha for a tracked directory
+          # and to the pinned gitlink commit for a submodule, so one helper
+          # covers 3rdparty/*. cs16-client is neither: it is untracked, so its
+          # stamp comes from the clone that was just checked out.
           sub_sha() {
             local path="$1" out
-            out="$(git ls-tree HEAD "$path" 2>/dev/null | awk '{print $3}')"
+            out="$(git rev-parse --verify --quiet "HEAD:$path" 2>/dev/null || true)"
             [ -n "$out" ] && echo "$out" || echo "unknown"
           }
-          PRODUCER_ARGS+=(--producer "vcs16=$(sub_sha vcs16)")
+          dir_sha() {
+            local path="$1" out
+            out="$(git -C "$path" rev-parse --verify --quiet HEAD 2>/dev/null || true)"
+            [ -n "$out" ] && echo "$out" || echo "unknown"
+          }
+          PRODUCER_ARGS+=(--producer "cs16-client=$(dir_sha cs16-client)")
           PRODUCER_ARGS+=(--producer "amxmodx=$(sub_sha 3rdparty/amxmodx)")
           PRODUCER_ARGS+=(--producer "metamod=$(sub_sha 3rdparty/metamod-fwgs)")
           PRODUCER_ARGS+=(--producer "yapb=$(sub_sha 3rdparty/yapb)")
@@ -473,9 +504,9 @@ jobs:
           # resolves it from the game directory, and with an empty assets/ in
           # the APK there is nothing left to find.
           #
-          # Taken from the vcs16 tree, which is the only copy: the shell build
+          # Taken from the cs16-client tree, which is the only copy: the shell build
           # no longer merges it into the APK, so this is the single source.
-          ASSETS_DIR="$GITHUB_WORKSPACE/vcs16/3rdparty/cs16client-assets"
+          ASSETS_DIR="$GITHUB_WORKSPACE/cs16-client/3rdparty/cs16client-extras"
           if [ ! -d "$ASSETS_DIR" ]; then
             echo "::error::client assets tree is missing at $ASSETS_DIR"
             exit 1
@@ -598,6 +629,54 @@ jobs:
           echo "${APP_VERSION_NAME:-unknown}" > "$GITHUB_WORKSPACE/version.txt"
           cat "$GITHUB_WORKSPACE/version.txt"
 
+      # cs16-client pins its own ndkVersion and its "continuous" build type passes
+          # -DCMAKE_C_COMPILER_LAUNCHER=ccache into CMake, which fails outright
+          # when ccache is missing. Neither is the r25c the .so build uses, so
+          # both are installed here, only for the run that needs them.
+      - name: Install client APK build deps
+        if: steps.build_type.outputs.needs_android == 'true'
+        shell: bash
+        run: |
+          set -e
+          command -v ccache >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq ccache; }
+          echo "ccache: $(command -v ccache)"
+          NDK_VER=$(grep -oP 'ndkVersion\s*=\s*"\K[^"]+' cs16-client/android/app/build.gradle)
+          echo "client ndk: $NDK_VER"
+          SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          [ -n "$SDKMANAGER" ] || SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -d "$ANDROID_HOME/ndk/$NDK_VER" ]; then
+            echo "y" | "$SDKMANAGER" "ndk;$NDK_VER" || true
+          fi
+          ls -d "$ANDROID_HOME/ndk/$NDK_VER"
+
+      # The stock client APK the patcher adopts and rewrites. Built here rather
+      # than fetched from the client repo's own release, so the whole update
+      # chain - patcher, libs, client APK - resolves against a single rolling
+      # release. Uses cs16-client's own gradle project and its "gitContinuous"
+      # build type, which signs from the keystore below and drops the .test
+      # application id suffix.
+      - name: Build the client APK
+        if: steps.build_type.outputs.needs_android == 'true'
+        working-directory: cs16-client/android
+        env:
+          KEYSTORE_FILE_PATH: ${{ github.workspace }}/signingkey.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "${{ secrets.SIGNING_KEY }}" ]; then
+            echo "${{ secrets.SIGNING_KEY }}" | base64 --decode > "$KEYSTORE_FILE_PATH"
+            ./gradlew --no-daemon assembleGitContinuous --stacktrace
+            cp app/build/outputs/apk/git/continuous/app-git-continuous.apk \
+               "$GITHUB_WORKSPACE/CS16Client-Android.apk"
+          else
+            echo "::warning::SIGNING_KEY is empty, building the unsigned debug variant"
+            ./gradlew --no-daemon assembleGitDebug --stacktrace
+            cp app/build/outputs/apk/git/debug/app-git-debug.apk \
+               "$GITHUB_WORKSPACE/CS16Client-Android.apk"
+          fi
+          ls -lh "$GITHUB_WORKSPACE/CS16Client-Android.apk"
+
       # Same rule as the version naming in "Detect build type": the
       # continuous tag, or a manual run on master. With the tag-only
       # condition this step was skipped on dispatch, so the run built
@@ -636,6 +715,7 @@ jobs:
           fi
           if [ "$NEEDS_ANDROID" = "true" ]; then
             FILES+=(version.txt android/app/build/outputs/apk/release/*.apk)
+            FILES+=(CS16Client-Android.apk)
           fi
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "nothing to upload"
@@ -653,7 +733,7 @@ jobs:
             [ -z "$name" ] && continue
             DROP=false
             case "$name" in
-              nexora_*.apk|version.txt)
+              nexora_*.apk|version.txt|CS16Client-Android.apk)
                 [ "$NEEDS_ANDROID" = "true" ] && DROP=true ;;
               *)
                 [ "$NEEDS_LIBS" = "true" ] && DROP=true ;;

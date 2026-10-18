@@ -1,3 +1,7 @@
 watch.out
 ci-watch.log
 ci-watch.seen
+cs16-client/
+signingkey.jks
+*.jks
+*.keystore

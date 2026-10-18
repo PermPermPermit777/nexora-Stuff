@@ -669,7 +669,7 @@ private fun externalRoot(app: Application): File {
     }
 
     /**
-     * Downloads the client APK from the vcs16 Continuous release into
+     * Downloads the client APK from our Continuous release into
      * filesDir/apk-source and adopts it. The patcher already talks to that
      * release for the native libraries, so this reuses the same quota-free
      * download path instead of asking the user to hunt for a file.
@@ -2706,11 +2706,13 @@ private fun externalRoot(app: Application): File {
         /** Releases (tags + patcher APK) are published here by CI. */
         const val APP_RELEASE_REPO = "berkchy/nexora"
         /**
-         * The client app itself is built by the vcs16 repository and published
-         * under the same rolling Continuous tag. The patcher can fetch that
-         * APK directly instead of asking the user to locate it on the device.
+         * The stock client APK, built from the cs16-client tree that this repo
+         * carries and published to our own rolling Continuous release, so the
+         * patcher and the client it adopts always come from one build. The
+         * patcher can fetch that APK directly instead of asking the user to
+         * locate it on the device.
          */
-        const val CLIENT_APK_REPO = "berkchy/vcs16"
+        const val CLIENT_APK_REPO = APP_RELEASE_REPO
         const val CLIENT_APK_ASSET = "CS16Client-Android.apk"
         /**
          * Single rolling release: one "Continuous" tag whose assets are

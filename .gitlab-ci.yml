@@ -7,6 +7,14 @@
 # Optional:
 #   DISCORD_WEBHOOK — same payload as the GitHub workflow
 #
+# Client APK signing (Settings > CI/CD > Variables), masked + protected. The
+# same keystore the GitHub workflow uses; without them the pipeline still runs
+# and publishes the unsigned debug variant instead.
+#   CS16_SIGNING_KEY      — base64 of signingkey.jks
+#   CS16_KEYSTORE_PASSWORD
+#   CS16_KEY_ALIAS
+#   CS16_KEY_PASSWORD
+#
 # versionName/versionCode: versionCode = epoch seconds so the code is
 # monotonically increasing across BOTH CI providers (GitHub run numbers and
 # GitLab pipeline IIDs are independent counters and would collide/downgrade).
@@ -114,10 +122,18 @@ build-release:
       fi
 
       ############################################################
-      # Submodules (vcs16, 3rdparty/hlsdk, 3rdparty/mm-p)
+      # Submodules (3rdparty/hlsdk, 3rdparty/mm-p) + the cs16-client clone
       ############################################################
       echo "== submodules =="
       git submodule update --init --recursive
+      PIN=$(tr -d '[:space:]' < cs16-client.pin)
+      test -n "$PIN" || { echo "cs16-client.pin is empty"; exit 1; }
+      git clone https://github.com/Velaron/cs16-client.git cs16-client
+      git -C cs16-client fetch origin "$PIN" 2>/dev/null || git -C cs16-client fetch origin
+      git -C cs16-client checkout "$PIN"
+      git -C cs16-client submodule update --init --recursive
+      test "$(git -C cs16-client rev-parse HEAD)" = "$PIN" \
+        || { echo "cs16-client is not at the pin"; exit 1; }
 
       ############################################################
       # Detect build type (parity with the GitHub "Detect build type" step)
@@ -169,7 +185,7 @@ build-release:
         if [ -n "$NATIVE_SHA" ]; then
           META_UP=$(echo "$META_JSON" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin).get('upstreams',{}),sort_keys=True))" 2>/dev/null || echo "")
           CUR_UP=$(echo "$UP_JSON" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin),sort_keys=True))" 2>/dev/null || echo "")
-          DIFF_OUT=$(git diff --name-only "$NATIVE_SHA" HEAD -- android/ci patches vcs16 3rdparty .github/workflows .gitlab-ci.yml 2>/dev/null || echo "DIFF-FAILED")
+          DIFF_OUT=$(git diff --name-only "$NATIVE_SHA" HEAD -- android/ci patches cs16-client.pin 3rdparty .github/workflows .gitlab-ci.yml 2>/dev/null || echo "DIFF-FAILED")
           if [ "$DIFF_OUT" != "DIFF-FAILED" ] && [ -z "$DIFF_OUT" ] && [ -n "$META_UP" ] && [ "$META_UP" = "$CUR_UP" ]; then
             SKIP_NATIVE=true
             NATIVE_SHA_OUT=$NATIVE_SHA
@@ -411,6 +427,35 @@ build-release:
         fi
         echo "${APP_VERSION_NAME:-unknown}" > "$WS/version.txt"
         cat "$WS/version.txt"
+
+        # The stock client APK the patcher adopts. Built from the pinned
+        # cs16-client clone with its own gradle project; cs16-client pins a
+        # different NDK than the .so build and its continuous build type hands
+        # ccache to CMake, so both are guaranteed here.
+        CLIENT_NDK=$(grep -oP 'ndkVersion\s*=\s*"\K[^"]+' cs16-client/android/app/build.gradle)
+        command -v ccache >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq ccache; }
+        if [ ! -d "$ANDROID_HOME/ndk/$CLIENT_NDK" ]; then
+          yes | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+          yes | "$SDKM" --sdk_root="$ANDROID_HOME" --install "ndk;$CLIENT_NDK" || true
+        fi
+        test -d "$ANDROID_HOME/ndk/$CLIENT_NDK" || {
+          echo "client NDK $CLIENT_NDK is missing"; exit 1; }
+
+        KEYSTORE_FILE_PATH="$WS/signingkey.jks"
+        if [ -n "$CS16_SIGNING_KEY" ]; then
+          echo "$CS16_SIGNING_KEY" | base64 --decode > "$KEYSTORE_FILE_PATH"
+          export KEYSTORE_FILE_PATH KEYSTORE_PASSWORD="$CS16_KEYSTORE_PASSWORD" \
+                 KEY_ALIAS="$CS16_KEY_ALIAS" KEY_PASSWORD="$CS16_KEY_PASSWORD"
+          (cd cs16-client/android && ./gradlew --no-daemon assembleGitContinuous --stacktrace)
+          cp cs16-client/android/app/build/outputs/apk/git/continuous/app-git-continuous.apk \
+             "$WS/CS16Client-Android.apk"
+        else
+          echo "CS16_SIGNING_KEY is empty, building the unsigned debug variant"
+          (cd cs16-client/android && ./gradlew --no-daemon assembleGitDebug --stacktrace)
+          cp cs16-client/android/app/build/outputs/apk/git/debug/app-git-debug.apk \
+             "$WS/CS16Client-Android.apk"
+        fi
+        ls -lh "$WS/CS16Client-Android.apk"
         cd "$WS"
       fi
 
@@ -426,7 +471,7 @@ build-release:
         if [ "$NEEDS_APK" = "true" ]; then
           PRESERVE='^$'
         else
-          PRESERVE='^(nexora_continuous\.apk|version\.txt)$'
+          PRESERVE='^(nexora_continuous\.apk|version\.txt|CS16Client-Android\.apk)$'
         fi
         gh release view continuous --json assets | jq -r '.assets[] | .name' | while read -r name; do
           [ -z "$name" ] && continue
@@ -445,7 +490,7 @@ build-release:
         shopt -s nullglob
         FILES=(amxx-addons.zip manifest.json manifest-v7a.json build-meta.json incremental/arm64-v8a/*.so incremental-v7a/armeabi-v7a/*.so compiler-assets/*)
         if [ "$NEEDS_APK" = "true" ]; then
-          FILES+=(version.txt android/app/build/outputs/apk/release/*.apk)
+          FILES+=(version.txt android/app/build/outputs/apk/release/*.apk CS16Client-Android.apk)
         fi
         gh release upload continuous --clobber "${FILES[@]}"
       else
@@ -455,7 +500,7 @@ build-release:
                incremental/arm64-v8a/*.so incremental-v7a/armeabi-v7a/*.so
                compiler-assets/*)
         if [ "$NEEDS_APK" = "true" ]; then
-          FILES+=(version.txt android/app/build/outputs/apk/release/*.apk)
+          FILES+=(version.txt android/app/build/outputs/apk/release/*.apk CS16Client-Android.apk)
         fi
         EXISTING=$(gh release view "$CI_COMMIT_TAG" >/dev/null 2>&1 && echo yes || echo no)
         if [ "$EXISTING" = "no" ]; then

@@ -157,7 +157,7 @@ def collect_entries(libdir: str, abi: str, previous: dict) -> list:
 
     client_name = f"libclient_android_{suffix}.so"
     add(client_name, f"lib/{abi}/{client_name}", False, "CS16Client client DLL (crash handler)",
-        producer="vcs16")
+        producer="cs16-client")
 
     # The main menu, built from the same tree as the client. The engine looks
     # for cl_dlls/libmenu_android_<arch>.so first, then <gamelibdir>/ of the
@@ -167,7 +167,7 @@ def collect_entries(libdir: str, abi: str, previous: dict) -> list:
     # app, which is not the one this tree builds.
     menu_name = f"libmenu_android_{suffix}.so"
     add(menu_name, f"lib/{abi}/{menu_name}", False, "CS16Client main menu (mainui_cpp)",
-        producer="vcs16")
+        producer="cs16-client")
 
     # VGUI2 scoreboard runtime. The client dll dlopen()s it instead of linking
     # it, so a device that never gets this file still runs - the text
@@ -175,7 +175,7 @@ def collect_entries(libdir: str, abi: str, previous: dict) -> list:
     # the only place the scoreboard can come from, and without it nobody would
     # ever receive it.
     add("libvgui2client.so", f"lib/{abi}/libvgui2client.so", True,
-        "VGUI2 scoreboard runtime (dlopen'ed by the client DLL)", producer="vcs16")
+        "VGUI2 scoreboard runtime (dlopen'ed by the client DLL)", producer="cs16-client")
 
     # ReGameDLL game DLL, bundled as libcs. Shipped from the berkchy fork branch
     # fix/first-spawn-equip; skipped silently when not present, then
@@ -207,7 +207,7 @@ def main():
         metavar="NAME=STAMP",
         help=(
             "id of the sources one group of libraries is built from, e.g. "
-            "vcs16=<commit>. Repeatable. A file whose producer is listed is "
+            "cs16-client=<commit>. Repeatable. A file whose producer is listed is "
             "stamped from that id instead of from its sha256, because the build "
             "is not reproducible and identical sources keep changing the hash."
         ),

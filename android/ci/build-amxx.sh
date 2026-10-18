@@ -727,18 +727,18 @@ else
 fi
 
 # ----------------------------------------------------------------- client (crash handler)
-# CS16Client client DLL (vcs16/cl_dll) — built with crash handler, bundled as libclient
-echo "== building client (vcs16, crash handler) =="
-CLIENT_SRC="$REPO_ROOT/vcs16"
+# CS16Client client DLL (cs16-client/cl_dll) — built with crash handler, bundled as libclient
+echo "== building client (cs16-client, crash handler) =="
+CLIENT_SRC="$REPO_ROOT/cs16-client"
 CLIENT_BUILD="$TMP/client-build"
-# Ensure vcs16 submodules are present (utlstring.h etc). CI checks out cs16-meta-patcher
-# without --recurse-submodules and vcs16 was copied without .git, so 3rdparty dirs may be empty.
+# Ensure cs16-client submodules are present (utlstring.h etc). CI may check out
+# cs16-client as a plain directory without its own .git, so 3rdparty dirs may be empty.
 if [ -f "$CLIENT_SRC/.gitmodules" ]; then
   if [ -d "$CLIENT_SRC/.git" ]; then
     git -C "$CLIENT_SRC" submodule update --init --recursive 2>&1 | head -20 || true
   else
-    echo "   vcs16 .git missing, fetching submodules manually"
-    for mod in "3rdparty/mainui_cpp|https://github.com/berkchy/mainui_cpp|08bdb7a5d1a422105a3bdd7d479ccc461a46ce01" "3rdparty/miniutl|https://github.com/FWGS/MiniUTL|048a416f4c54c501dfd728fd792bfdc9f2883f51"; do
+    echo "   cs16-client .git missing, fetching submodules manually"
+    for mod in "3rdparty/mainui_cpp|https://github.com/Velaron/mainui_cpp|4922113b7477d9073e9f483f46b0e10b3be888b7" "3rdparty/miniutl|https://github.com/FWGS/MiniUTL|048a416f4c54c501dfd728fd792bfdc9f2883f51"; do
       IFS='|' read -r path url rev <<< "$mod"
       if [ ! -f "$CLIENT_SRC/$path/CMakeLists.txt" ] && [ ! -f "$CLIENT_SRC/$path/README.md" ]; then
         rm -rf "$CLIENT_SRC/$path"

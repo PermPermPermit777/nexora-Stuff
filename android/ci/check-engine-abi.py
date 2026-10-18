@@ -31,7 +31,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
 
-API_PROXY = os.path.join(REPO, "vcs16", "engine", "APIProxy.h")
+API_PROXY = os.path.join(REPO, "cs16-client", "engine", "APIProxy.h")
 FINGERPRINT = os.path.join(HERE, "engine_members.txt")
 
 # The engine_motdapi_t / android_motdapi_t table, which replaced the struct

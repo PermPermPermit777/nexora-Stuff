@@ -1,7 +1,3 @@
-[submodule "vcs16"]
-	path = vcs16
-	url = https://github.com/berkchy/vcs16.git
-	branch = main
 [submodule "3rdparty/hlsdk"]
 	path = 3rdparty/hlsdk
 	url = https://github.com/berkchy/hlsdk.git

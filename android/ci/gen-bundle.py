@@ -71,7 +71,7 @@ def main():
             "required": False,
             "description": "YaPB bot plugin",
         })
-    # CS16Client client DLL with crash handler (vcs16/cl_dll)
+    # CS16Client client DLL with crash handler (cs16-client/cl_dll)
     client_so = os.path.join(libdir, f"libclient_android_{suffix}.so")
     if os.path.exists(client_so):
         entries.append({
