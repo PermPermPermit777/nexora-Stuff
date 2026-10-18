@@ -65,10 +65,10 @@ reports exactly what it is about to replace before it touches anything.
 
 ### Optional where it can be
 
-Not everything has to be fatal. `libvgui2client.so` (the VGUI2 scoreboard) is
-`dlopen`ed at runtime rather than linked: an APK that predates it still loads
-and runs with the text scoreboard. The same reasoning applies to the engine's
-MOTD support — an older engine simply renders plain text.
+Not everything has to be fatal. `libclient_android_*.so` is optional on an APK
+that already carries a working client: the patcher replaces it in place rather
+than refusing, so an older game package still boots with the client it shipped
+with.
 
 ---
 

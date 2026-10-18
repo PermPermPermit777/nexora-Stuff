@@ -787,17 +787,6 @@ if [ -n "$CLIENT_SO" ]; then
 else
   echo "WARN: client lib not found, skipping"
 fi
-# The VGUI2 scoreboard library. Built as its own target: the client dlopen()s
-# it, so it is not a link dependency and building the client no longer covers
-# it. Ships under its SONAME next to the client in the runtime lib dir.
-cmake --build "$CLIENT_BUILD" --target vgui2client -j"$(nproc)"
-VGUI_SO=$(find "$CLIENT_BUILD" -name "libvgui2client.so" | head -1)
-if [ -n "$VGUI_SO" ]; then
-  cp "$VGUI_SO" "$OUT/lib/$ABI/libvgui2client.so"
-  echo "   vgui2client -> $(ls -l "$OUT/lib/$ABI/libvgui2client.so" | awk '{print $5}') bytes"
-else
-  echo "WARN: vgui2client lib not found, the scoreboard will fall back to text"
-fi
 cmake --build "$CLIENT_BUILD" --target xashmenu -j"$(nproc)"
 MENU_SO=$(find "$CLIENT_BUILD" -name "libmenu*.so" | head -1)
 if [ -n "$MENU_SO" ]; then

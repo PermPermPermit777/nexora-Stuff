@@ -85,14 +85,15 @@ def stamp_for(name: str, sha: str, previous: dict, producer: str | None = None) 
     Two ways to answer that, and the producer one is the one that works.
 
     Comparing sha256 of the output only works if the build is reproducible.
-    It is not: libvgui2client.so built from an identical tree on 7 Oct and on
-    12 Oct came out the same length, 15911408 bytes, with different content.
-    So its sha changed, the stamp advanced, and the phone re-downloaded a
-    library nobody had touched - along with every other one built in the same
-    run, because they all carry the same flaw.
+    It is not: libclient_android_*.so built from an identical tree twice came
+    out the same length with different content. So its sha changed, the stamp
+    advanced, and the phone re-downloaded a library nobody had touched - along
+    with every other one built in the same run, because they all carry the same
+    flaw.
 
     A producer stamp asks a better question: has anything that goes into this
-    library changed? The CI already knows, as the submodule commits. It is
+    library changed? The CI already knows, as the submodule commits and the
+    cs16-client pin. It is
     coarser than sha256 within a producer - an edit to the client dll marks the
     menu as new too - but it is never wrong in the direction that matters,
     which is marking a changed library as up to date.
@@ -168,14 +169,6 @@ def collect_entries(libdir: str, abi: str, previous: dict) -> list:
     menu_name = f"libmenu_android_{suffix}.so"
     add(menu_name, f"lib/{abi}/{menu_name}", False, "CS16Client main menu (mainui_cpp)",
         producer="cs16-client")
-
-    # VGUI2 scoreboard runtime. The client dll dlopen()s it instead of linking
-    # it, so a device that never gets this file still runs - the text
-    # scoreboard takes over. It is still marked required because this bundle is
-    # the only place the scoreboard can come from, and without it nobody would
-    # ever receive it.
-    add("libvgui2client.so", f"lib/{abi}/libvgui2client.so", True,
-        "VGUI2 scoreboard runtime (dlopen'ed by the client DLL)", producer="cs16-client")
 
     # ReGameDLL game DLL, bundled as libcs. Shipped from the berkchy fork branch
     # fix/first-spawn-equip; skipped silently when not present, then
